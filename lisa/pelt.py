@@ -32,7 +32,7 @@ PELT half-life in number of windows.
 
 PELT_SCALE = 1024
 
-def simulate_pelt(activations, init=0, index=None, clock=None, window=PELT_WINDOW, half_life=PELT_HALF_LIFE, scale=PELT_SCALE):
+def simulate_pelt(activations, init=0, index=None, clock=None, window=PELT_WINDOW, half_life=PELT_HALF_LIFE, scale=PELT_SCALE, simulate_rounding_errors=False):
     """
     Simulate a PELT signal out of a series of activations.
 
@@ -61,6 +61,11 @@ def simulate_pelt(activations, init=0, index=None, clock=None, window=PELT_WINDO
     :param scale: Scale of the signal, i.e. maximum value it can take.
     :type scale: float
 
+    :param simulate_rounding_errors: Simulate the some rounding errors that would
+        be introduced by integer arithmetic. This is not so accurate since the
+        algorithm used here is not the same as the one in the kernel.
+    :type simulate_rounding_errors: bool
+
     .. note:: PELT windowing is not time-invariant, i.e. it depends on the
         absolute value of the timestamp. This means that the timestamp of the
         activations matters, and it is recommended to use the ``clock``
@@ -87,7 +92,7 @@ def simulate_pelt(activations, init=0, index=None, clock=None, window=PELT_WINDO
     # some NaN at the beginning of the dataframe as well
     df.dropna(inplace=True)
 
-    def make_pelt_sim(init, scale, window, half_life):
+    def make_pelt_sim(init, scale, window, half_life, simulate_rounding_errors):
         decay = (1/2)**(1/half_life)
         # Alpha as defined in https://en.wikipedia.org/wiki/Moving_average
         alpha = 1 - decay
@@ -97,6 +102,18 @@ def simulate_pelt(activations, init=0, index=None, clock=None, window=PELT_WINDO
         # Output signal
         signal = init / scale
         output = signal
+
+        if simulate_rounding_errors:
+            def update_signal(val):
+                nonlocal signal
+                diff = abs(signal - val)
+                if diff * scale >= 1:
+                    signal = val
+
+        else:
+            def update_signal(val):
+                nonlocal signal
+                signal = val
 
         def pelt(row):
             nonlocal acc, signal, output
@@ -114,11 +131,11 @@ def simulate_pelt(activations, init=0, index=None, clock=None, window=PELT_WINDO
                 first_window_fraction /= window
 
                 acc += running * first_window_fraction
-                signal = alpha * acc + (1-alpha) * signal
+                update_signal(alpha * acc + (1-alpha) * signal)
 
                 # Handle the windows we fully crossed
                 for _ in range(windows - 1):
-                    signal = alpha * running + (1-alpha) * signal
+                    update_signal(alpha * running + (1-alpha) * signal)
 
                 # Handle the current incomplete window
                 last_window_fraction = (clock % window) / window
@@ -132,7 +149,7 @@ def simulate_pelt(activations, init=0, index=None, clock=None, window=PELT_WINDO
                 #  sched/cfs: Make util/load_avg more stable 625ed2bf049d5a352c1bcca962d6e133454eaaff
                 output = signal + last_window_fraction * (extrapolated - signal)
 
-                signal += alpha * running * last_window_fraction
+                update_signal(signal + alpha * running * last_window_fraction)
                 acc = 0
             # If we are still in the same window, just accumulate the running
             # time
@@ -148,6 +165,7 @@ def simulate_pelt(activations, init=0, index=None, clock=None, window=PELT_WINDO
         window=window,
         half_life=half_life,
         scale=scale,
+        simulate_rounding_errors=simulate_rounding_errors,
     )
     df['pelt'] = df.apply(sim, axis=1)
     return df['pelt']

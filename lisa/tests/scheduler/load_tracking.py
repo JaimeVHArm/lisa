@@ -301,7 +301,13 @@ class InvarianceItem(LoadTrackingBase, ExekallTaggable):
             logger.warning('PELT clock is not available, ftrace timestamp will be used at the expense of accuracy')
             clock = None
 
-        df['simulated'] = simulate_pelt(df_activation['active'], index=df.index, init=init, clock=clock)
+        df['simulated'] = simulate_pelt(
+            df_activation['active'],
+            index=df.index,
+            init=init,
+            clock=clock,
+            simulate_rounding_errors=True
+        )
 
         # Since load is now CPU invariant in recent kernel versions, we don't
         # rescale it back. To match the old behavior, that line is
